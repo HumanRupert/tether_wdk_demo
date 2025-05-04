@@ -11,6 +11,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@account-abstraction/sdk": "^0.6.0",
     "@safe-global/api-kit": "^3.0.1",
     "@safe-global/protocol-kit": "^6.0.3",
     "@safe-global/relay-kit": "^4.0.2",

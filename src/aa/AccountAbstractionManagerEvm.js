@@ -1,8 +1,10 @@
-import { ethers } from 'ethers';
+import { ethers, parseEther, parseUnits } from 'ethers';
 import Safe, { EthersAdapter } from '@safe-global/protocol-kit';
+
 import { createCBridgeInstance } from '../bridge/cBridgeClient.js';
 import { BridgeAdapterCBridge } from '../bridge/BridgeAdapterCBridge.js';
 import { SwapAdapter0x } from '../swap/SwapAdapter0x.js';
+import { Erc4337ClientEvm } from './erc4337/Erc4337ClientEvm.js';
 
 export const ERC20_ABI = [
   "function transfer(address to, uint256 amount) external returns (bool)",
@@ -10,7 +12,6 @@ export const ERC20_ABI = [
   "function approve(address spender, uint256 amount) external returns (bool)",
   "function allowance(address owner, address spender) external view returns (uint256)"
 ];
-
 
 export class AccountAbstractionManagerEvm {
   constructor(eoaWallet, config) {
@@ -23,6 +24,7 @@ export class AccountAbstractionManagerEvm {
     });
 
     this.safeSdk = null;
+    this.erc4337Client = null;
     this.bridgeAdapter = null;
     this.swapAdapter = null;
     this.chainId = config.chainId;
@@ -33,6 +35,11 @@ export class AccountAbstractionManagerEvm {
       ethAdapter: this.ethAdapter,
       safeAddress
     });
+  }
+
+  async initERC4337(walletAccount) {
+    this.erc4337Client = new Erc4337ClientEvm(walletAccount, this.config);
+    await this.erc4337Client.init();
   }
 
   async initBridge(walletAccount) {
@@ -54,34 +61,34 @@ export class AccountAbstractionManagerEvm {
     return await this.swapAdapter.swap(options);
   }
 
+
   async transfer({ recipient, amount, tokenAddress = null }) {
-    if (!this.safeSdk) throw new Error("Safe not initialized");
+    if (!this.erc4337Client) throw new Error("ERC-4337 client not initialized");
 
-    const txData = tokenAddress
-      ? await this._buildTokenTransferData(tokenAddress, recipient, amount)
-      : {
-          to: recipient,
-          data: '0x',
-          value: ethers.utils.parseEther(amount).toString()
-        };
-
-    const safeTx = await this.safeSdk.createTransaction({ safeTransactionData: txData });
-    const executeTxResponse = await this.safeSdk.executeTransaction(safeTx);
-    const receipt = await executeTxResponse.transactionResponse.wait();
-
-    return receipt.transactionHash;
+    if (tokenAddress) {
+      return await this._transferERC20Via4337({ tokenAddress, recipient, amount });
+    } else {
+      return await this.erc4337Client.transfer({
+        recipient,
+        amount: parseEther(amount.toString())
+      });
+    }
   }
 
-  async _buildTokenTransferData(tokenAddress, recipient, amount) {
+  async _transferERC20Via4337({ tokenAddress, recipient, amount }) {
     const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, this.eoaWallet.provider);
     const decimals = await tokenContract.decimals();
-    const formattedAmount = ethers.utils.parseUnits(amount.toString(), decimals);
+    const formattedAmount = parseUnits(amount.toString(), decimals);
 
-    return {
-      to: tokenAddress,
-      data: tokenContract.interface.encodeFunctionData("transfer", [recipient, formattedAmount]),
-      value: "0"
-    };
+    const data = tokenContract.interface.encodeFunctionData("transfer", [recipient, formattedAmount]);
+
+    const userOp = await this.erc4337Client.client.buildUserOp({
+      target: tokenAddress,
+      data,
+      value: 0n
+    });
+
+    return await this.erc4337Client.client.sendUserOp(userOp);
   }
 
   async quoteSupply({ tokenAddress, amount, recipient }) {
@@ -111,9 +118,20 @@ export class AccountAbstractionManagerEvm {
     return await this.bridgeAdapter.quoteBridge(options);
   }
 
+  async _buildTokenTransferData(tokenAddress, recipient, amount) {
+    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, this.eoaWallet.provider);
+    const decimals = await tokenContract.decimals();
+    const formattedAmount = parseUnits(amount.toString(), decimals);
+
+    return {
+      to: tokenAddress,
+      data: tokenContract.interface.encodeFunctionData("transfer", [recipient, formattedAmount]),
+      value: "0"
+    };
+  }
+
   async getAbstractedAddress() {
     if (!this.safeSdk) throw new Error("Safe not initialized");
     return this.safeSdk.getAddress();
   }
-
 }
