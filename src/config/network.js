@@ -11,7 +11,8 @@ export const RPC_URL = `https://sepolia.infura.io/v3/${INFURA_KEY}`;
 
 export const EvmAccountAbstractionConfig = {
     rpcUrl: RPC_URL,
-    bundlerUrl: "https://api.stackup.sh/v1/sepolia/BUNDLER_ID",
-    entryPointAddress: "0x0576a174D229E3cFA37253523E645A78A0C91B57",
+    zerodevProjectId: 'ID',
+    bundlerUrl: 'https://rpc.zerodev.app/api/v2/bundler/ID',
+      entryPointAddress: "0x0576a174D229E3cFA37253523E645A78A0C91B57",
   };
   

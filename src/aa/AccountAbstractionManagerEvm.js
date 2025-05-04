@@ -1,10 +1,12 @@
-import { ethers, parseEther, parseUnits } from 'ethers';
+import { ethers, parseEther, parseUnits, Contract } from 'ethers';
 import Safe, { EthersAdapter } from '@safe-global/protocol-kit';
 
 import { createCBridgeInstance } from '../bridge/cBridgeClient.js';
 import { BridgeAdapterCBridge } from '../bridge/BridgeAdapterCBridge.js';
 import { SwapAdapter0x } from '../swap/SwapAdapter0x.js';
-import { Erc4337ClientEvm } from './erc4337/Erc4337ClientEvm.js';
+
+import { getZeroDevSafeSigner } from '@zerodev/gnosis-safe';
+import { createZeroDevBundlerClient, createZeroDevPaymasterClient } from '@zerodev/sdk';
 
 export const ERC20_ABI = [
   "function transfer(address to, uint256 amount) external returns (bool)",
@@ -24,7 +26,7 @@ export class AccountAbstractionManagerEvm {
     });
 
     this.safeSdk = null;
-    this.erc4337Client = null;
+    this.erc4337Signer = null;
     this.bridgeAdapter = null;
     this.swapAdapter = null;
     this.chainId = config.chainId;
@@ -37,18 +39,32 @@ export class AccountAbstractionManagerEvm {
     });
   }
 
-  async initERC4337(walletAccount) {
-    this.erc4337Client = new Erc4337ClientEvm(walletAccount, this.config);
-    await this.erc4337Client.init();
+  async initERC4337(account) {
+    const bundler = createZeroDevBundlerClient({
+      projectId: this.config.zerodevProjectId,
+      chainId: this.chainId
+    });
+
+    const paymaster = createZeroDevPaymasterClient({
+      projectId: this.config.zerodevProjectId,
+      chainId: this.chainId
+    });
+
+    this.erc4337Signer = await getZeroDevSafeSigner({
+      projectId: this.config.zerodevProjectId,
+      signer: account.wallet,
+      bundler,
+      paymaster
+    });
   }
 
-  async initBridge(walletAccount) {
-    const cBridge = createCBridgeInstance(walletAccount.wallet);
-    this.bridgeAdapter = new BridgeAdapterCBridge(cBridge, walletAccount, this.chainId);
+  async initBridge(account) {
+    const cBridge = createCBridgeInstance(account.wallet);
+    this.bridgeAdapter = new BridgeAdapterCBridge(cBridge, account, this.chainId);
   }
 
-  async initSwap(walletAccount) {
-    this.swapAdapter = new SwapAdapter0x(walletAccount, this.chainId);
+  async initSwap(account) {
+    this.swapAdapter = new SwapAdapter0x(account, this.chainId);
   }
 
   async quoteSwap(options) {
@@ -63,45 +79,37 @@ export class AccountAbstractionManagerEvm {
 
 
   async transfer({ recipient, amount, tokenAddress = null }) {
-    if (!this.erc4337Client) throw new Error("ERC-4337 client not initialized");
+    if (!this.erc4337Signer) throw new Error("ZeroDev ERC-4337 signer not initialized");
 
     if (tokenAddress) {
       return await this._transferERC20Via4337({ tokenAddress, recipient, amount });
-    } else {
-      return await this.erc4337Client.transfer({
-        recipient,
-        amount: parseEther(amount.toString())
-      });
     }
+
+    const tx = await this.erc4337Signer.sendTransaction({
+      to: recipient,
+      value: parseEther(amount.toString()),
+      data: '0x'
+    });
+
+    const receipt = await tx.wait();
+    return receipt.hash;
   }
 
   async _transferERC20Via4337({ tokenAddress, recipient, amount }) {
-    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, this.eoaWallet.provider);
+    const tokenContract = new Contract(tokenAddress, ERC20_ABI, this.eoaWallet.provider);
     const decimals = await tokenContract.decimals();
     const formattedAmount = parseUnits(amount.toString(), decimals);
 
     const data = tokenContract.interface.encodeFunctionData("transfer", [recipient, formattedAmount]);
 
-    const userOp = await this.erc4337Client.client.buildUserOp({
-      target: tokenAddress,
-      data,
-      value: 0n
+    const tx = await this.erc4337Signer.sendTransaction({
+      to: tokenAddress,
+      value: 0n,
+      data
     });
 
-    return await this.erc4337Client.client.sendUserOp(userOp);
-  }
-
-  async quoteSupply({ tokenAddress, amount, recipient }) {
-    const txData = await this._buildTokenTransferData(tokenAddress, recipient, amount);
-    const safeTx = await this.safeSdk.createTransaction({ safeTransactionData: txData });
-    const gasEstimate = await this.safeSdk.estimateGas(safeTx);
-    return { txData, gasEstimate: gasEstimate.toString() };
-  }
-
-  async supply({ tokenAddress, amount, recipient }) {
-    const txData = await this._buildTokenTransferData(tokenAddress, recipient, amount);
-    const safeTx = await this.safeSdk.createTransaction({ safeTransactionData: txData });
-    return safeTx;
+    const receipt = await tx.wait();
+    return receipt.hash;
   }
 
   async bridge(options) {
@@ -118,8 +126,21 @@ export class AccountAbstractionManagerEvm {
     return await this.bridgeAdapter.quoteBridge(options);
   }
 
+  async quoteSupply({ tokenAddress, amount, recipient }) {
+    const txData = await this._buildTokenTransferData(tokenAddress, recipient, amount);
+    const safeTx = await this.safeSdk.createTransaction({ safeTransactionData: txData });
+    const gasEstimate = await this.safeSdk.estimateGas(safeTx);
+    return { txData, gasEstimate: gasEstimate.toString() };
+  }
+
+  async supply({ tokenAddress, amount, recipient }) {
+    const txData = await this._buildTokenTransferData(tokenAddress, recipient, amount);
+    const safeTx = await this.safeSdk.createTransaction({ safeTransactionData: txData });
+    return safeTx;
+  }
+
   async _buildTokenTransferData(tokenAddress, recipient, amount) {
-    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, this.eoaWallet.provider);
+    const tokenContract = new Contract(tokenAddress, ERC20_ABI, this.eoaWallet.provider);
     const decimals = await tokenContract.decimals();
     const formattedAmount = parseUnits(amount.toString(), decimals);
 
