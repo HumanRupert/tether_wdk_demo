@@ -34,7 +34,7 @@ export class SwapAdapter0x {
 
     const { data: txData } = await axios.get(url);
 
-    // Only approve if token isn't native ETH
+    // Only approve if token not native ETH
     if (txData.allowanceTarget && tokenIn !== ZeroAddress) {
       const token = new Contract(tokenIn, ERC20_ABI, this.wallet.wallet);
       const currentAllowance = await token.allowance(userAddress, txData.allowanceTarget);

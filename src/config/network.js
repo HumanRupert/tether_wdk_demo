@@ -13,8 +13,5 @@ export const EvmAccountAbstractionConfig = {
     rpcUrl: RPC_URL,
     bundlerUrl: "https://api.stackup.sh/v1/sepolia/YOUR_ID",
     entryPointAddress: "0x0576a174D229E3cFA37253523E645A78A0C91B57",
-    paymasterUrl: "https://paymaster.example.com", // optional
-    paymasterAddress: "0x...",                     // optional
-    paymasterToken: { address: "0x..." },          // optional
   };
   

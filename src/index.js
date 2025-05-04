@@ -12,7 +12,7 @@ const main = async () => {
   console.log("EOA Address:", eoa.address);
 
   const balance = await eoa.getBalance();
-  console.log("EOA Balance (ETH):", balance);
+  console.log("EOA Balance (eth):", balance);
 
   const signature = await eoa.signMessage("Please verify ownership");
   console.log("Signature:", signature);
